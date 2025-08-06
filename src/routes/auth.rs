@@ -15,6 +15,13 @@ pub struct SigninRequest {
     pub password: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+    pub new_password: String,
+    pub confirm_password: String,
+}
+
 pub async fn signup(
     State(db): State<Database>,
     Json(payload): Json<SignupRequest>,
@@ -160,6 +167,105 @@ pub async fn signin(
             "email": user.email,
             "username": user.username,
             "created_at": user.created_at
+        }
+    })))
+}
+
+pub async fn forgot_password(
+    State(db): State<Database>,
+    Json(payload): Json<ForgotPasswordRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Validasi input
+    if payload.email.is_empty() || payload.new_password.is_empty() || payload.confirm_password.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "message": "Email dan password wajib diisi."
+            }))
+        ));
+    }
+
+    // Validasi password match
+    if payload.new_password != payload.confirm_password {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "message": "Password tidak cocok."
+            }))
+        ));
+    }
+
+    // Validasi panjang password
+    if payload.new_password.len() < 6 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "success": false,
+                "message": "Password minimal 6 karakter."
+            }))
+        ));
+    }
+
+    // Cari user berdasarkan email
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
+        .bind(&payload.email)
+        .fetch_optional(&db)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "message": "Terjadi kesalahan pada server."
+                }))
+            )
+        })?;
+
+    // Cek apakah user ditemukan
+    let user = match user {
+        Some(user) => user,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "success": false,
+                    "message": "Email tidak ditemukan."
+                }))
+            ));
+        }
+    };
+
+    // Update password
+    // Note: Dalam production, hash password menggunakan bcrypt atau argon2
+    let password_hash = payload.new_password; // TODO: Hash password properly
+
+    let updated_user = sqlx::query_as::<_, User>(
+        "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2 RETURNING *"
+    )
+    .bind(&password_hash)
+    .bind(user.id)
+    .fetch_one(&db)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "success": false,
+                "message": "Gagal mengupdate password."
+            }))
+        )
+    })?;
+
+    // Response sukses
+    Ok(Json(json!({
+        "success": true,
+        "message": "Password berhasil direset!",
+        "user": {
+            "id": updated_user.id,
+            "email": updated_user.email,
+            "updated_at": updated_user.updated_at
         }
     })))
 }
